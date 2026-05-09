@@ -28,12 +28,17 @@ const STORAGE_KEY = 'propertyListingsV1';
 
 const emptyForm = (type) => Object.fromEntries(PROPERTY_TYPES[type].fields.map((f) => [f, '']));
 
+const COMPARE_HIDDEN_FIELDS = new Set(['대표사진', 'AI 매물 분석 요약', '비고']);
+const DETAIL_HIDDEN_FIELDS = new Set(['대표사진', 'AI 매물 분석 요약', '비고']);
+
 export default function App() {
   const [type, setType] = useState('land');
   const [formData, setFormData] = useState(emptyForm('land'));
   const [listings, setListings] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [printMode, setPrintMode] = useState(null);
+  const [printMode, setPrintMode] = useState('compare');
+  const [editingId, setEditingId] = useState(null);
+  const [validationMessage, setValidationMessage] = useState('');
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -50,9 +55,43 @@ export default function App() {
     [listings, selectedIds],
   );
 
+  const compareChunks = useMemo(() => {
+    const arr = [];
+    for (let i = 0; i < selectedListings.length; i += 3) arr.push(selectedListings.slice(i, i + 3));
+    return arr;
+  }, [selectedListings]);
+
+  const canCompare = useMemo(() => {
+    if (selectedListings.length === 0 || selectedListings.length > 3) return false;
+    return new Set(selectedListings.map((item) => item.type)).size === 1;
+  }, [selectedListings]);
+
+  const canDetail = selectedListings.length === 1;
+
+  useEffect(() => {
+    if (printMode === 'compare') {
+      if (selectedListings.length === 0) {
+        setValidationMessage('비교 매물장은 같은 유형의 매물을 1~3개 선택해 주세요.');
+      } else if (selectedListings.length > 3) {
+        setValidationMessage('비교 매물장은 최대 3개까지만 선택할 수 있습니다.');
+      } else if (new Set(selectedListings.map((item) => item.type)).size > 1) {
+        setValidationMessage('비교 매물장은 같은 유형의 매물만 선택할 수 있습니다.');
+      } else {
+        setValidationMessage('');
+      }
+    } else if (printMode === 'detail') {
+      if (selectedListings.length !== 1) {
+        setValidationMessage('개별 매물장은 매물 1개를 선택해야 합니다.');
+      } else {
+        setValidationMessage('');
+      }
+    }
+  }, [printMode, selectedListings]);
+
   const onChangeType = (nextType) => {
     setType(nextType);
     setFormData(emptyForm(nextType));
+    setEditingId(null);
   };
 
   const handleInput = (field, value) => setFormData((prev) => ({ ...prev, [field]: value }));
@@ -66,104 +105,149 @@ export default function App() {
 
   const onSave = (e) => {
     e.preventDefault();
-    setListings((prev) => [{ id: crypto.randomUUID(), type, data: formData, createdAt: Date.now() }, ...prev]);
+    if (editingId) {
+      setListings((prev) => prev.map((item) => (item.id === editingId ? { ...item, type, data: formData } : item)));
+    } else {
+      setListings((prev) => [{ id: crypto.randomUUID(), type, data: formData, createdAt: Date.now() }, ...prev]);
+    }
     setFormData(emptyForm(type));
+    setEditingId(null);
+  };
+
+  const onEdit = (id) => {
+    const target = listings.find((item) => item.id === id);
+    if (!target) return;
+    setEditingId(id);
+    setType(target.type);
+    setFormData({ ...target.data });
+  };
+
+  const onDelete = (id) => {
+    setListings((prev) => prev.filter((item) => item.id !== id));
+    setSelectedIds((prev) => prev.filter((selectedId) => selectedId !== id));
+    if (editingId === id) {
+      setEditingId(null);
+      setFormData(emptyForm(type));
+    }
   };
 
   const toggleSelection = (id) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]));
   };
 
-  const compareChunks = useMemo(() => {
-    const arr = [];
-    for (let i = 0; i < selectedListings.length; i += 3) arr.push(selectedListings.slice(i, i + 3));
-    return arr;
-  }, [selectedListings]);
+  const renderCompare = printMode === 'compare' && canCompare;
+  const renderDetail = printMode === 'detail' && canDetail;
 
   return (
     <div className="app">
-      <h1>토지/상가/공장창고 매물장 자동생성기</h1>
+      <header className="app-header no-print">
+        <h1>하이탑 매물장 자동생성 시스템</h1>
+      </header>
 
-      <section className="panel no-print">
-        <h2>1) 매물 입력</h2>
-        <div className="type-tabs">
-          {Object.entries(PROPERTY_TYPES).map(([key, cfg]) => (
-            <button key={key} className={type === key ? 'active' : ''} onClick={() => onChangeType(key)}>{cfg.label}</button>
-          ))}
-        </div>
+      <main className="workspace">
+        <section className="panel form-panel no-print">
+          <h2>입력폼</h2>
+          <div className="type-tabs">
+            {Object.entries(PROPERTY_TYPES).map(([key, cfg]) => (
+              <button key={key} className={type === key ? 'active' : ''} onClick={() => onChangeType(key)} type="button">{cfg.label}</button>
+            ))}
+          </div>
 
-        <form onSubmit={onSave} className="form-grid">
-          {currentFields.map((field) => (
-            <label key={field}>
-              <span>{field}</span>
-              {field === '대표사진' ? (
-                <input type="file" accept="image/*" onChange={(e) => handleImageUpload(field, e.target.files?.[0])} />
-              ) : field === 'AI 매물 분석 요약' || field === '비고' ? (
-                <textarea value={formData[field]} onChange={(e) => handleInput(field, e.target.value)} rows={3} />
-              ) : (
-                <input value={formData[field]} onChange={(e) => handleInput(field, e.target.value)} />
-              )}
-            </label>
-          ))}
-          <button type="submit" className="primary">저장</button>
-        </form>
-      </section>
-
-      <section className="panel no-print">
-        <h2>2) 저장된 매물 목록</h2>
-        <ul className="listing-list">
-          {listings.map((item) => (
-            <li key={item.id}>
-              <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleSelection(item.id)} />
-              <strong>{PROPERTY_TYPES[item.type].label}</strong>
-              <span>{item.data['소재지'] || '(소재지 미입력)'}</span>
-              <span>{item.data['매매가격'] || item.data['월세'] || '-'}</span>
-            </li>
-          ))}
-        </ul>
-        <div className="actions">
-          <button onClick={() => setPrintMode('compare')} disabled={selectedIds.length === 0}>비교 매물장 만들기</button>
-          <button onClick={() => setPrintMode('detail')} disabled={selectedIds.length !== 1}>개별 매물장 만들기</button>
-          <button className="primary" onClick={() => window.print()} disabled={!printMode}>인쇄</button>
-        </div>
-      </section>
-
-      <section className="preview">
-        <h2 className="no-print">3) 출력 미리보기</h2>
-        {printMode === 'compare' && compareChunks.map((chunk, pageIdx) => (
-          <div className="paper" key={pageIdx}>
-            <h3>비교 매물장 ({pageIdx + 1} 페이지)</h3>
-            <div className="cards three-col">
-              {chunk.map((item) => (
-                <article key={item.id} className="card">
-                  <h4>{PROPERTY_TYPES[item.type].label}</h4>
-                  {item.data['대표사진'] && <img src={item.data['대표사진']} alt="대표사진" />}
-                  {Object.entries(item.data).filter(([k]) => k !== '대표사진').map(([k, v]) => (
-                    <p key={k}><b>{k}:</b> {v || '-'}</p>
-                  ))}
-                </article>
-              ))}
+          <form onSubmit={onSave} className="form-grid">
+            {currentFields.map((field) => (
+              <label key={field}>
+                <span>{field}</span>
+                {field === '대표사진' ? (
+                  <input type="file" accept="image/*" onChange={(e) => handleImageUpload(field, e.target.files?.[0])} />
+                ) : field === 'AI 매물 분석 요약' || field === '비고' ? (
+                  <textarea value={formData[field]} onChange={(e) => handleInput(field, e.target.value)} rows={4} />
+                ) : (
+                  <input value={formData[field]} onChange={(e) => handleInput(field, e.target.value)} />
+                )}
+              </label>
+            ))}
+            <div className="form-actions">
+              <button type="submit" className="primary">{editingId ? '수정 저장' : '저장'}</button>
+              {editingId && <button type="button" onClick={() => { setEditingId(null); setFormData(emptyForm(type)); }}>취소</button>}
             </div>
-          </div>
-        ))}
+          </form>
+        </section>
 
-        {printMode === 'detail' && selectedListings[0] && (
-          <div className="paper">
-            <h3>개별 매물장</h3>
-            <article className="detail-card">
-              <h4>{PROPERTY_TYPES[selectedListings[0].type].label}</h4>
-              {selectedListings[0].data['대표사진'] && <img src={selectedListings[0].data['대표사진']} alt="대표사진" />}
-              {Object.entries(selectedListings[0].data).filter(([k]) => !['대표사진', 'AI 매물 분석 요약'].includes(k)).map(([k, v]) => (
-                <p key={k}><b>{k}:</b> {v || '-'}</p>
-              ))}
-              <div className="ai-summary">
-                <h5>AI 매물 분석 요약</h5>
-                <p>{selectedListings[0].data['AI 매물 분석 요약'] || '요약 없음'}</p>
-              </div>
-            </article>
+        <section className="preview panel">
+          <h2 className="no-print">출력 미리보기</h2>
+          <div className="no-print mode-switch">
+            <button type="button" className={printMode === 'compare' ? 'active' : ''} onClick={() => setPrintMode('compare')}>비교 매물장</button>
+            <button type="button" className={printMode === 'detail' ? 'active' : ''} onClick={() => setPrintMode('detail')}>개별 매물장</button>
+            <button className="primary" type="button" onClick={() => window.print()} disabled={Boolean(validationMessage)}>인쇄</button>
           </div>
-        )}
-      </section>
+          {validationMessage && <p className="guide no-print">{validationMessage}</p>}
+
+          {renderCompare && compareChunks.map((chunk, pageIdx) => (
+            <div className="paper compare-page" key={pageIdx}>
+              <h3>{PROPERTY_TYPES[chunk[0].type].label} 비교 매물장</h3>
+              <div className="compare-list">
+                {chunk.map((item, idx) => (
+                  <article key={item.id} className="compare-item">
+                    <div className="item-label">매물 {idx + 1}</div>
+                    <div className="item-body">
+                      <div className="photo-wrap">{item.data['대표사진'] ? <img src={item.data['대표사진']} alt="대표사진" /> : <div className="photo-empty">사진 없음</div>}</div>
+                      <table>
+                        <tbody>
+                          {Object.entries(item.data)
+                            .filter(([k]) => !COMPARE_HIDDEN_FIELDS.has(k))
+                            .map(([k, v]) => (
+                              <tr key={k}><th>{k}</th><td>{v || '-'}</td></tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <footer className="contact">하이탑부동산 010-1234-5678</footer>
+            </div>
+          ))}
+
+          {renderDetail && selectedListings[0] && (
+            <div className="paper detail-page">
+              <h3>{selectedListings[0].data['매물명'] || selectedListings[0].data['소재지'] || '개별 매물장'}</h3>
+              <div className="detail-photo-wrap">{selectedListings[0].data['대표사진'] ? <img src={selectedListings[0].data['대표사진']} alt="대표사진" /> : <div className="photo-empty">사진 없음</div>}</div>
+              <table className="detail-table"><tbody>
+                {Object.entries(selectedListings[0].data)
+                  .filter(([k]) => !DETAIL_HIDDEN_FIELDS.has(k))
+                  .map(([k, v]) => <tr key={k}><th>{k}</th><td>{v || '-'}</td></tr>)}
+              </tbody></table>
+              <section className="ai-box">
+                <h4>AI 매물 분석 요약</h4>
+                <p>{selectedListings[0].data['AI 매물 분석 요약'] || '요약 없음'}</p>
+              </section>
+              <section className="memo-box">
+                <h4>비고</h4>
+                <p>{selectedListings[0].data['비고'] || '-'}</p>
+              </section>
+              <footer className="contact">하이탑부동산 010-1234-5678</footer>
+            </div>
+          )}
+        </section>
+
+        <section className="panel list-panel no-print">
+          <h2>저장된 매물 목록</h2>
+          <ul className="listing-list">
+            {listings.map((item) => (
+              <li key={item.id}>
+                <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleSelection(item.id)} />
+                <strong>{PROPERTY_TYPES[item.type].label}</strong>
+                <span>{item.data['소재지'] || '(소재지 미입력)'}</span>
+                <span>{item.data['매매가격'] || item.data['월세'] || '-'}</span>
+                <div className="row-actions">
+                  <button type="button" onClick={() => onEdit(item.id)}>수정</button>
+                  <button type="button" onClick={() => onDelete(item.id)}>삭제</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </main>
     </div>
   );
 }
